@@ -179,7 +179,7 @@ const MAX_MATERIALS_DISPLAY = 1;
  * Adicione aqui os CNPJs da sua empresa para identificação correta
  */
 const EMPRESA_CNPJS = [
-  '05255986000164', // CNPJ principal (sem formatação)
+  '07868543000174', // CNPJ ALMAX (07.868.543/0001-74)
   // Adicione outros CNPJs/filiais se necessário
 ];
 
