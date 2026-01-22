@@ -1,0 +1,107 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Tema Branco e Azul ALMAX */
+    --background: 0 0% 100%;
+    --foreground: 210 100% 25%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 210 100% 25%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 100% 25%;
+
+    /* Azul ALMAX #003E7E - HSL: 210, 100%, 25% */
+    --primary: 210 100% 25%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 50% 95%;
+    --secondary-foreground: 210 100% 25%;
+
+    --muted: 210 30% 96%;
+    --muted-foreground: 210 50% 40%;
+
+    --accent: 210 100% 40%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 69% 40%;
+    --success-foreground: 0 0% 100%;
+
+    --border: 210 30% 90%;
+    --input: 210 30% 95%;
+    --ring: 210 100% 25%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 210 100% 25%;
+    --sidebar-primary: 210 100% 25%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 50% 95%;
+    --sidebar-accent-foreground: 210 100% 25%;
+    --sidebar-border: 210 30% 90%;
+    --sidebar-ring: 210 100% 25%;
+
+    /* Custom tokens - Gradientes Azul ALMAX */
+    --gradient-primary: linear-gradient(135deg, hsl(210, 100%, 25%) 0%, hsl(210, 100%, 35%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(210, 100%, 40%) 0%, hsl(210, 90%, 50%) 100%);
+    --gradient-surface: linear-gradient(180deg, hsl(0, 0%, 100%) 0%, hsl(210, 30%, 98%) 100%);
+    --shadow-soft: 0 2px 8px -2px hsl(210 100% 25% / 0.08), 0 4px 16px -4px hsl(210 100% 25% / 0.06);
+    --shadow-elevated: 0 4px 16px -4px hsl(210 100% 25% / 0.12), 0 8px 32px -8px hsl(210 100% 25% / 0.08);
+    --shadow-glow: 0 0 24px hsl(210 100% 25% / 0.15);
+
+    /* Cor customizada ALMAX */
+    --almax-blue: 210 100% 25%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+@layer components {
+  .gradient-primary {
+    background: var(--gradient-primary);
+  }
+
+  .gradient-surface {
+    background: var(--gradient-surface);
+  }
+
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+
+  .shadow-elevated {
+    box-shadow: var(--shadow-elevated);
+  }
+
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
