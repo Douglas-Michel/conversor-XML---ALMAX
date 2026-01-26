@@ -18,6 +18,49 @@ interface DataTableProps {
   data: NotaFiscal[];
 }
 
+// Função para obter descrição do CFOP
+function getCFOPDescription(cfop: string | undefined): string {
+  if (!cfop) return 'CFOP não identificado';
+  
+  const descriptions: Record<string, string> = {
+    // Compras
+    '1102': 'Compra para comercialização',
+    '1101': 'Compra para industrialização',
+    '1201': 'Devolução de venda de produção própria',
+    '1202': 'Devolução de venda de mercadoria adquirida',
+    '1403': 'Compra para comercialização em operação com mercadoria sujeita ao regime de substituição tributária',
+    '2102': 'Compra para comercialização (interestadual)',
+    '2101': 'Compra para industrialização (interestadual)',
+    
+    // Vendas
+    '5102': 'Venda de mercadoria adquirida ou recebida de terceiros',
+    '5101': 'Venda de produção do estabelecimento',
+    '5201': 'Devolução de compra para industrialização',
+    '5202': 'Devolução de compra para comercialização',
+    '5403': 'Venda de mercadoria adquirida ou recebida de terceiros em operação com mercadoria sujeita ao regime de ST',
+    '6102': 'Venda de mercadoria adquirida ou recebida de terceiros (interestadual)',
+    '6101': 'Venda de produção do estabelecimento (interestadual)',
+    
+    // Remessas
+    '5901': 'Remessa para industrialização por encomenda',
+    '5902': 'Retorno de mercadoria utilizada na industrialização por encomenda',
+    '5915': 'Remessa de mercadoria para demonstração',
+    '5916': 'Retorno de mercadoria recebida para demonstração',
+    '5917': 'Remessa de mercadoria em consignação mercantil ou industrial',
+    '5949': 'Outra saída de mercadoria não especificada',
+    '6901': 'Remessa para industrialização por encomenda (interestadual)',
+    '6949': 'Outra saída de mercadoria não especificada (interestadual)',
+    
+    // Devoluções
+    '5410': 'Devolução de compra para comercialização',
+    '5411': 'Devolução de compra para industrialização',
+    '1410': 'Devolução de venda de mercadoria adquirida',
+    '1411': 'Devolução de venda de produção do estabelecimento',
+  };
+  
+  return descriptions[cfop] || `CFOP ${cfop} - Consulte a tabela CFOP oficial`;
+}
+
 export function DataTable({ data }: DataTableProps) {
   if (data.length === 0) return null;
 
@@ -71,18 +114,36 @@ export function DataTable({ data }: DataTableProps) {
                     {nota.dataEmissao}
                   </TableCell>
                   <TableCell className="text-center">
-                    <Badge 
-                      variant={nota.tipoOperacao === 'Entrada' ? 'blue' : 'destructive'}
-                      className="text-xs whitespace-nowrap"
-                    >
-                      {nota.tipoOperacao}
-                    </Badge>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex flex-col gap-1 items-center cursor-help">
+                          <Badge 
+                            variant={nota.isRemessa ? 'secondary' : nota.isAjusteEstorno ? 'outline' : 'default'}
+                            className="text-xs whitespace-nowrap"
+                          >
+                            {nota.tipo}
+                          </Badge>
+                          <Badge 
+                            variant={nota.tipoOperacao === 'Entrada' ? 'blue' : 'destructive'}
+                            className="text-xs whitespace-nowrap"
+                          >
+                            {nota.tipoOperacao}
+                          </Badge>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs">
+                        <div className="text-sm">
+                          <p className="font-semibold">CFOP: {nota.cfop || 'N/A'}</p>
+                          <p className="text-muted-foreground mt-1">{getCFOPDescription(nota.cfop)}</p>
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
                   </TableCell>
                   <TableCell className="max-w-[250px] truncate text-sm" title={nota.fornecedorCliente}>
                     {nota.fornecedorCliente}
                   </TableCell>
                   <TableCell className="font-mono text-sm text-center">
-                    {nota.tipo === 'NF-e' ? nota.numero : '-'}
+                    {nota.tipo?.includes('NF-e') ? nota.numero : '-'}
                   </TableCell>
                   <TableCell className="font-mono text-sm text-center">
                     {nota.numeroCTe || '-'}

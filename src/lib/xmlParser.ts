@@ -40,7 +40,7 @@ export interface ProtocoloInfo {
  */
 export interface NotaFiscal {
   id: string;
-  tipo: TipoDocumento;
+  tipo: string; // Mudado de TipoDocumento para string para permitir "NF-e (Remessa)"
   tipoOperacao: TipoOperacao;
   numero: string;
   numeroCTe: string;
@@ -50,6 +50,12 @@ export interface NotaFiscal {
   cnpjCpf: string;
   valorTotal: number;
   baseCalculoICMS: number;
+  
+  // Identificação de nota de remessa
+  finNFe?: string; // Finalidade da NF-e: 1=Normal, 2=Complementar, 3=Ajuste, 4=Devolução
+  cfop?: string; // Código Fiscal de Operações e Prestações
+  isRemessa?: boolean; // Flag para identificação de remessa (por finNFe, CFOP ou natureza)
+  isAjusteEstorno?: boolean; // Flag para identificar notas de ajuste (finNFe=3) ou devolução/estorno (finNFe=4)
   
   // Tributos PIS
   aliquotaPIS: number;
@@ -184,12 +190,65 @@ const EMPRESA_CNPJS = [
 ];
 
 /**
+ * Mapeamento de CFOPs para tipo de operação especial
+ */
+const CFOP_REMESSA = [
+  // Remessa para demonstração
+  '5915', '6915', '5916', '6916',
+  // Remessa em consignação
+  '5917', '6917', '5918', '6918', '5919', '6919',
+  // Remessa para venda fora do estabelecimento
+  '5904', '6904',
+  // Remessa para depósito fechado ou armazém geral
+  '5905', '6905', '5906', '6906',
+  // Remessa de bem do ativo imobilizado
+  '5551', '6551', '5552', '6552',
+  // Remessa de amostra grátis
+  '5911', '6911', '5912', '6912',
+  // Outras saídas de mercadoria (quando relacionadas a remessa)
+  '5949', '6949',
+  // Remessa para industrialização
+  '5901', '6901', '5902', '6902', '5903', '6903',
+  // Remessa para depósito ou armazém
+  '5907', '6907', '5908', '6908',
+];
+
+const CFOP_DEVOLUCAO = [
+  // Devolução de compra
+  '5201', '6201', '5202', '6202', '5209', '6209', '5210', '6210',
+  // Devolução de venda
+  '1201', '2201', '1202', '2202', '1209', '2209', '1210', '2210',
+  // Devolução de consignação
+  '1918', '2918', '1919', '2919',
+  // Devolução de remessa
+  '1916', '2916', '1917', '2917',
+  // Devolução de industrialização
+  '1902', '2902', '1903', '2903',
+  // Outras devoluções
+  '5410', '6410', '5411', '6411', '5412', '6412', '5413', '6413',
+  '1410', '2410', '1411', '2411', '1414', '2414', '1415', '2415',
+];
+
+/**
  * Detecta se um CNPJ pertence à empresa usuária
  */
 function isCnpjDaEmpresa(cnpj: string): boolean {
   if (!cnpj) return false;
   const cnpjLimpo = cnpj.replace(/\D/g, '');
   return EMPRESA_CNPJS.some(empresaCnpj => cnpjLimpo === empresaCnpj);
+}
+
+/**
+ * Identifica tipo de operação especial pelo CFOP
+ */
+function identificarTipoPorCFOP(cfop: string): 'remessa' | 'devolucao' | 'normal' {
+  if (!cfop) return 'normal';
+  const cfopLimpo = cfop.replace(/\D/g, '');
+  
+  if (CFOP_REMESSA.includes(cfopLimpo)) return 'remessa';
+  if (CFOP_DEVOLUCAO.includes(cfopLimpo)) return 'devolucao';
+  
+  return 'normal';
 }
 
 /**
@@ -596,14 +655,16 @@ function determineSituacao(cStat: string): SituacaoDocumento {
 /**
  * Detecta tipo de operação (Entrada/Saída) em NF-e
  * 
- * LÓGICA CORRETA:
- * - Se SUA empresa é o EMITENTE = Nota de SAÍDA (você vendeu/enviou)
- * - Se SUA empresa é o DESTINATÁRIO = Nota de ENTRADA (você comprou/recebeu)
- * - Se SUA empresa NÃO aparece = usa campo tpNF do XML
+ * LÓGICA CORRETA (PRIORIDADE):
+ * 1. Campo tpNF do XML (0=Entrada, 1=Saída)
+ * 2. CFOP (1xxx/2xxx=Entrada, 5xxx/6xxx=Saída)
+ * 3. Se SUA empresa é o EMITENTE = Nota de SAÍDA (você vendeu/enviou)
+ * 4. Se SUA empresa é o DESTINATÁRIO = Nota de ENTRADA (você comprou/recebeu)
  * 
  * @param ide - Elemento ide do XML
  * @param emit - Elemento emit do XML
  * @param dest - Elemento dest do XML
+ * @param cfop - CFOP do primeiro item
  * @param fileName - Nome do arquivo para log
  * @returns Tipo de operação detectado
  */
@@ -611,57 +672,44 @@ function detectNFeOperationType(
   ide: Element | null, 
   emit: Element | null, 
   dest: Element | null,
+  cfop: string,
   fileName: string
 ): TipoOperacao {
-  // Obtém CNPJs
+  // PRIORIDADE 1: Campo tpNF do XML (mais confiável)
+  const tpNF = getTextContent(ide, 'tpNF').trim();
+  if (tpNF === '0') return 'Entrada';
+  if (tpNF === '1') return 'Saída';
+  
+  // PRIORIDADE 2: CFOP (primeiro dígito indica entrada/saída)
+  if (cfop) {
+    const cfopLimpo = cfop.replace(/\D/g, '');
+    const primeiroDigito = cfopLimpo.charAt(0);
+    
+    // 1xxx ou 2xxx = Entrada (dentro do estado ou interestadual)
+    if (primeiroDigito === '1' || primeiroDigito === '2') return 'Entrada';
+    
+    // 5xxx ou 6xxx = Saída (dentro do estado ou interestadual)
+    if (primeiroDigito === '5' || primeiroDigito === '6') return 'Saída';
+  }
+  
+  // PRIORIDADE 3: Verifica se a empresa usuária está no emitente ou destinatário
   const cnpjEmit = (getTextContent(emit, 'CNPJ') || getTextContent(emit, 'CPF')).replace(/\D/g, '');
   const cnpjDest = (getTextContent(dest, 'CNPJ') || getTextContent(dest, 'CPF')).replace(/\D/g, '');
   
-  // Verifica se a empresa usuária está no emitente ou destinatário
   const empresaEhEmitente = isCnpjDaEmpresa(cnpjEmit);
   const empresaEhDestinatario = isCnpjDaEmpresa(cnpjDest);
   
-  // REGRA PRINCIPAL: Se identificamos a empresa
   if (empresaEhEmitente && !empresaEhDestinatario) {
-    // Empresa é emitente = SAÍDA (você está vendendo)
     return 'Saída';
   }
   
   if (empresaEhDestinatario && !empresaEhEmitente) {
-    // Empresa é destinatário = ENTRADA (você está comprando)
     return 'Entrada';
   }
   
-  if (empresaEhEmitente && empresaEhDestinatario) {
-    // Nota entre filiais ou devolução - usa tpNF
-    const tpNF = getTextContent(ide, 'tpNF').trim();
-    if (tpNF === '0') return 'Entrada';
-    if (tpNF === '1') return 'Saída';
-    console.warn(`Nota própria (emit=dest) sem tpNF em ${fileName}, assumindo Saída`);
-    return 'Saída';
-  }
-  
-  // FALLBACK: Empresa não identificada, usa campo tpNF do XML
-  const tpNF = getTextContent(ide, 'tpNF').trim();
-  
-  if (tpNF === '0') {
-    console.warn(`tpNF=0 (Entrada) em nota de terceiro em ${fileName}`);
-    return 'Entrada';
-  }
-  if (tpNF === '1') {
-    console.warn(`tpNF=1 (Saída) em nota de terceiro em ${fileName}`);
-    return 'Saída';
-  }
-  
-  // FALLBACK FINAL: Sem tpNF e empresa não identificada
-  // Se tem destinatário, assume que é uma nota de saída (do emitente para o dest)
-  if (cnpjDest && cnpjEmit && cnpjDest !== cnpjEmit) {
-    console.warn(`Nota de terceiro sem tpNF em ${fileName}, inferindo como Saída (padrão)`);
-    return 'Saída';
-  }
-  
-  console.warn(`Não foi possível determinar tipo em ${fileName}, assumindo Entrada`);
-  return 'Entrada';
+  // FALLBACK: Se nada funcionou, assume Saída
+  console.warn(`Não foi possível determinar tipo de operação em ${fileName}, assumindo Saída`);
+  return 'Saída';
 }
 
 /**
@@ -885,8 +933,22 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   const total = findElementByLocalName(doc, 'total');
   const icmsTot = total ? findElementByLocalName(total, 'ICMSTot') : null;
   
-  // Identifica tipo de operação
-  const tipoOperacao = detectNFeOperationType(ide, emit, dest, fileName);
+  // Extrai CFOP do primeiro item (necessário para detecção de tipo)
+  const primeiroItem = getElementsByLocalName(doc, 'det')[0];
+  const cfop = primeiroItem ? getTextContent(primeiroItem, 'CFOP') : '';
+  
+  // Identifica tipo de operação (usa CFOP, tpNF, e emitente/destinatário)
+  const tipoOperacao = detectNFeOperationType(ide, emit, dest, cfop, fileName);
+  
+  // Finalidade da NF-e (1=Normal, 2=Complementar, 3=Ajuste, 4=Devolução)
+  const finNFe = getTextContent(ide, 'finNFe');
+  
+  // Identifica tipo especial PRIORITARIAMENTE pelo CFOP (usando cfop já extraído acima)
+  const tipoPorCFOP = identificarTipoPorCFOP(cfop);
+  
+  // Define flags baseado no CFOP (prioridade) e finNFe (fallback)
+  const isRemessa = tipoPorCFOP === 'remessa' || finNFe === '2';
+  const isAjusteEstorno = tipoPorCFOP === 'devolucao' || finNFe === '3' || finNFe === '4';
   
   // Chave de acesso
   const chaveAcesso = infNFe?.getAttribute('Id')?.replace('NFe', '') ?? '';
@@ -908,42 +970,49 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
     || getNumericContent(icmsTot, 'vNF') 
     || getNumericContent(doc, 'vNF');
     
-  // Tributos - Usa valores declarados no totalizador
-  const valorPIS = getNumericContent(icmsTot, 'vPIS') || 0;
-  const valorCOFINS = getNumericContent(icmsTot, 'vCOFINS') || 0;
-  const valorIPI = getNumericContent(icmsTot, 'vIPI') || 0;
-  const valorDIFAL = getNumericContent(icmsTot, 'vICMSUFDest') || 0;
+  // Tributos - Usa valores declarados no totalizador (pula cálculos se for remessa)
+  let valorPIS = 0, valorCOFINS = 0, valorIPI = 0, valorDIFAL = 0;
+  let aliquotaPIS = 0, aliquotaCOFINS = 0, aliquotaIPI = 0, aliquotaDIFAL = 0;
+  let basePIS = 0, baseCOFINS = 0, baseIPI = 0;
+  let declaredPISPct = 0, declaredCOFINSPct = 0, declaredIPIPct = 0;
+  
+  if (!isRemessa) {
+    // Tributos - Usa valores declarados no totalizador
+    valorPIS = getNumericContent(icmsTot, 'vPIS') || 0;
+    valorCOFINS = getNumericContent(icmsTot, 'vCOFINS') || 0;
+    valorIPI = getNumericContent(icmsTot, 'vIPI') || 0;
+    valorDIFAL = getNumericContent(icmsTot, 'vICMSUFDest') || 0;
 
-  // PIS: cálculo com agregação por item
-  const pisSummary = aggregatePisCofins(doc, 'PIS');
-  const basePIS = pisSummary.base || getNumericContent(findElementByLocalName(icmsTot, 'PIS') || doc, 'vBC');
-  const declaredPISPct = pisSummary.declaredPctWeighted || getNumericContent(findElementByLocalName(icmsTot, 'PIS') || doc, 'pPIS');
-  // Alíquota calculada: (Valor PIS ÷ Base ICMS) × 100
-  const aliquotaPIS = (baseICMS > 0 && valorPIS > 0) ? Math.round((valorPIS / baseICMS) * 100 * 100) / 100 : (declaredPISPct > 0 ? Math.round(declaredPISPct * 100) / 100 : 0);
+    // PIS: cálculo com agregação por item
+    const pisSummary = aggregatePisCofins(doc, 'PIS');
+    basePIS = pisSummary.base || getNumericContent(findElementByLocalName(icmsTot, 'PIS') || doc, 'vBC');
+    declaredPISPct = pisSummary.declaredPctWeighted || getNumericContent(findElementByLocalName(icmsTot, 'PIS') || doc, 'pPIS');
+    // Alíquota calculada: (Valor PIS ÷ Base ICMS) × 100
+    aliquotaPIS = (baseICMS > 0 && valorPIS > 0) ? Math.round((valorPIS / baseICMS) * 100 * 100) / 100 : (declaredPISPct > 0 ? Math.round(declaredPISPct * 100) / 100 : 0);
 
-  // COFINS: cálculo análogo ao PIS
-  const cofinsSummary = aggregatePisCofins(doc, 'COFINS');
-  const baseCOFINS = cofinsSummary.base || getNumericContent(findElementByLocalName(icmsTot, 'COFINS') || doc, 'vBC');
-  const declaredCOFINSPct = cofinsSummary.declaredPctWeighted || getNumericContent(findElementByLocalName(icmsTot, 'COFINS') || doc, 'pCOFINS');
-  // Alíquota calculada: (Valor COFINS ÷ Base ICMS) × 100
-  const aliquotaCOFINS = (baseICMS > 0 && valorCOFINS > 0) ? Math.round((valorCOFINS / baseICMS) * 100 * 100) / 100 : (declaredCOFINSPct > 0 ? Math.round(declaredCOFINSPct * 100) / 100 : 0);
+    // COFINS: cálculo análogo ao PIS
+    const cofinsSummary = aggregatePisCofins(doc, 'COFINS');
+    baseCOFINS = cofinsSummary.base || getNumericContent(findElementByLocalName(icmsTot, 'COFINS') || doc, 'vBC');
+    declaredCOFINSPct = cofinsSummary.declaredPctWeighted || getNumericContent(findElementByLocalName(icmsTot, 'COFINS') || doc, 'pCOFINS');
+    // Alíquota calculada: (Valor COFINS ÷ Base ICMS) × 100
+    aliquotaCOFINS = (baseICMS > 0 && valorCOFINS > 0) ? Math.round((valorCOFINS / baseICMS) * 100 * 100) / 100 : (declaredCOFINSPct > 0 ? Math.round(declaredCOFINSPct * 100) / 100 : 0);
 
-  // IPI: extração da alíquota real do XML
-  const ipiSummary = aggregateIPI(doc);
-  const baseIPI = ipiSummary.base;
-  const declaredIPIPct = ipiSummary.declaredPctWeighted;
-  // Usa alíquota declarada no XML, fallback para cálculo reverso, depois 0
-  const aliquotaIPI = declaredIPIPct > 0 
-    ? Math.round(declaredIPIPct * 100) / 100 
-    : (baseIPI > 0 && valorIPI > 0) 
-      ? Math.round((valorIPI / baseIPI) * 100 * 100) / 100 
-      : 0;
+    // IPI: extração da alíquota real do XML
+    const ipiSummary = aggregateIPI(doc);
+    baseIPI = ipiSummary.base;
+    declaredIPIPct = ipiSummary.declaredPctWeighted;
+    // Usa alíquota declarada no XML, fallback para cálculo reverso, depois 0
+    aliquotaIPI = declaredIPIPct > 0 
+      ? Math.round(declaredIPIPct * 100) / 100 
+      : (baseIPI > 0 && valorIPI > 0) 
+        ? Math.round((valorIPI / baseIPI) * 100 * 100) / 100 
+        : 0;
 
-  // DIFAL
-  const aliquotaDIFAL = baseICMS > 0 ? Math.round((valorDIFAL / baseICMS) * 100 * 100) / 100 : 0;
+    // DIFAL
+    aliquotaDIFAL = baseICMS > 0 ? Math.round((valorDIFAL / baseICMS) * 100 * 100) / 100 : 0;
+  }
 
-  // Redução ICMS do primeiro item
-  const primeiroItem = getElementsByLocalName(doc, 'det')[0];
+  // Redução ICMS do primeiro item (usa primeiroItem já declarado acima)
   const icmsElement = primeiroItem ? findElementByLocalName(primeiroItem, 'ICMS') : null;
   const reducaoICMS = icmsElement?.children[0] ? getNumericContent(icmsElement.children[0], 'pRedBC') : 0;
 
@@ -959,23 +1028,38 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   // Materiais
   const material = extractMaterials(doc);
 
-  // Validações: Compara valores declarados com cálculo
-  const expectedPIS = baseICMS * (aliquotaPIS / 100);
-  const expectedCOFINS = baseICMS * (aliquotaCOFINS / 100);
-  const expectedIPI = baseICMS * (aliquotaIPI / 100);
-  const expectedICMS = baseICMS * (aliquotaICMS / 100);
+  // Validações: Compara valores declarados com cálculo (pula se for remessa)
+  let expectedPIS = 0, expectedCOFINS = 0, expectedIPI = 0, expectedICMS = 0;
+  let verifiedPIS = true, verifiedCOFINS = true, verifiedIPI = true, verifiedICMS = true;
+  
+  if (!isRemessa) {
+    expectedPIS = baseICMS * (aliquotaPIS / 100);
+    expectedCOFINS = baseICMS * (aliquotaCOFINS / 100);
+    expectedIPI = baseICMS * (aliquotaIPI / 100);
+    expectedICMS = baseICMS * (aliquotaICMS / 100);
 
-  const tolerance = 5.0;
-  const verifiedPIS = valorPIS === 0 || Math.abs(valorPIS - expectedPIS) <= tolerance;
-  const verifiedCOFINS = valorCOFINS === 0 || Math.abs(valorCOFINS - expectedCOFINS) <= tolerance;
-  const verifiedIPI = valorIPI === 0 || Math.abs(valorIPI - expectedIPI) <= tolerance;
-  const verifiedICMS = Math.abs(valorICMS - expectedICMS) <= tolerance;
+    const tolerance = 5.0;
+    verifiedPIS = valorPIS === 0 || Math.abs(valorPIS - expectedPIS) <= tolerance;
+    verifiedCOFINS = valorCOFINS === 0 || Math.abs(valorCOFINS - expectedCOFINS) <= tolerance;
+    verifiedIPI = valorIPI === 0 || Math.abs(valorIPI - expectedIPI) <= tolerance;
+    verifiedICMS = Math.abs(valorICMS - expectedICMS) <= tolerance;
+  }
 
   // Retorna objeto NotaFiscal completo
+  const tipoDoc = isRemessa ? 'NF-e (Remessa)' 
+                : (tipoPorCFOP === 'devolucao' ? 'NF-e (Devolução)' 
+                  : (finNFe === '3' ? 'NF-e (Estorno)' 
+                    : (finNFe === '4' ? 'NF-e (Devolução)' 
+                      : 'NF-e')));
+  
   return {
     id: crypto.randomUUID(),
-    tipo: 'NF-e',
+    tipo: tipoDoc,
     tipoOperacao,
+    finNFe,
+    cfop,
+    isRemessa,
+    isAjusteEstorno,
     numero: getTextContent(ide, 'nNF'),
     numeroCTe: '',
     serie: getTextContent(ide, 'serie'),

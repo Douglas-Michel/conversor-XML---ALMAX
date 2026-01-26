@@ -39,9 +39,9 @@ export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fis
   // Main sheet: keep same columns/order as the UI table for visual parity
   const data = normalizedNotas.map((nota) => ({
     'DATA EMISSÃO': parseDate(nota.dataEmissao || today),
-    'TIPO NF': nota.tipoOperacao?.toUpperCase() || '',
+    'TIPO NF': `${nota.tipo?.toUpperCase() || 'NF-E'} - ${nota.tipoOperacao?.toUpperCase() || ''}`,
     'FORNECEDOR/CLIENTE': nota.fornecedorCliente?.toUpperCase() || '',
-    'Nº NF-E': nota.tipo === 'NF-e' ? nota.numero : '',
+    'Nº NF-E': nota.tipo?.includes('NF-e') ? nota.numero : '',
     'Nº CT-E': nota.numeroCTe || '',
     'MATERIAL': nota.material?.toUpperCase() || '',
     'VALOR': nota.valorTotal,
