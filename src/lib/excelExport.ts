@@ -32,7 +32,8 @@ export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fis
     if (!dateStr) return '';
     const [day, month, year] = dateStr.split('/');
     if (!day || !month || !year) return '';
-    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+    // Create date at noon UTC to avoid timezone issues
+    return new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), 12, 0, 0));
   };
 
   // Main sheet: keep same columns/order as the UI table for visual parity
