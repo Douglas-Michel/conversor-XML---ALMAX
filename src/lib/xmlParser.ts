@@ -190,6 +190,15 @@ const EMPRESA_CNPJS = [
   // Adicione outros CNPJs/filiais se necessário
 ];
 
+const EMPRESA_CNPJ_RAIZES = Array.from(
+  new Set(
+    EMPRESA_CNPJS
+      .map(cnpj => cnpj.replace(/\D/g, ''))
+      .filter(cnpj => cnpj.length === 14)
+      .map(cnpj => cnpj.slice(0, 8))
+  )
+);
+
 /**
  * Mapeamento de CFOPs para tipo de operação especial
  */
@@ -236,7 +245,80 @@ const CFOP_DEVOLUCAO = [
 function isCnpjDaEmpresa(cnpj: string): boolean {
   if (!cnpj) return false;
   const cnpjLimpo = cnpj.replace(/\D/g, '');
-  return EMPRESA_CNPJS.some(empresaCnpj => cnpjLimpo === empresaCnpj);
+
+  // CPF: compara apenas por igualdade exata com os cadastrados
+  if (cnpjLimpo.length === 11) {
+    return EMPRESA_CNPJS.some(empresaCnpj => cnpjLimpo === empresaCnpj.replace(/\D/g, ''));
+  }
+
+  // CNPJ: considera igualdade exata e também raiz (matriz/filiais)
+  if (cnpjLimpo.length === 14) {
+    const matchExato = EMPRESA_CNPJS.some(empresaCnpj => cnpjLimpo === empresaCnpj.replace(/\D/g, ''));
+    if (matchExato) return true;
+
+    const raiz = cnpjLimpo.slice(0, 8);
+    return EMPRESA_CNPJ_RAIZES.includes(raiz);
+  }
+
+  return false;
+}
+
+function normalizeOperationText(text: string): string {
+  return (text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function inferOperationFromCFOP(cfop: string): TipoOperacao | null {
+  if (!cfop) return null;
+  const cfopLimpo = cfop.replace(/\D/g, '');
+  const primeiroDigito = cfopLimpo.charAt(0);
+
+  if (primeiroDigito === '1' || primeiroDigito === '2' || primeiroDigito === '3') return 'Entrada';
+  if (primeiroDigito === '5' || primeiroDigito === '6' || primeiroDigito === '7') return 'Saída';
+
+  return null;
+}
+
+function inferOperationFromNatOp(natOp: string): TipoOperacao | null {
+  const normalized = normalizeOperationText(natOp);
+  if (!normalized) return null;
+
+  if (normalized.includes('devolucao de venda')) return 'Entrada';
+  if (normalized.includes('devolucao de compra')) return 'Saída';
+
+  if (
+    normalized.includes('compra') ||
+    normalized.includes('aquisicao') ||
+    normalized.includes('entrada') ||
+    normalized.includes('retorno')
+  ) {
+    return 'Entrada';
+  }
+
+  if (
+    normalized.includes('venda') ||
+    normalized.includes('remessa') ||
+    normalized.includes('saida')
+  ) {
+    return 'Saída';
+  }
+
+  return null;
+}
+
+function identificarTipoPorNatureza(natOp: string): 'remessa' | 'devolucao' | 'ajuste' | 'normal' {
+  const normalized = normalizeOperationText(natOp);
+  if (!normalized) return 'normal';
+
+  if (normalized.includes('remessa')) return 'remessa';
+  if (normalized.includes('devolucao') || normalized.includes('estorno')) return 'devolucao';
+  if (normalized.includes('ajuste') || normalized.includes('complement')) return 'ajuste';
+
+  return 'normal';
 }
 
 /**
@@ -657,10 +739,10 @@ function determineSituacao(cStat: string): SituacaoDocumento {
  * Detecta tipo de operação (Entrada/Saída) em NF-e
  * 
  * LÓGICA CORRETA (PRIORIDADE):
- * 1. Campo tpNF do XML (0=Entrada, 1=Saída)
- * 2. CFOP (1xxx/2xxx=Entrada, 5xxx/6xxx=Saída)
- * 3. Se SUA empresa é o EMITENTE = Nota de SAÍDA (você vendeu/enviou)
- * 4. Se SUA empresa é o DESTINATÁRIO = Nota de ENTRADA (você comprou/recebeu)
+ * 1. Papel da empresa no documento (emitente/destinatário)
+ * 2. CFOP (1/2/3=Entrada, 5/6/7=Saída)
+ * 3. Campo tpNF (perspectiva do emitente)
+ * 4. Natureza da operação (natOp)
  * 
  * @param ide - Elemento ide do XML
  * @param emit - Elemento emit do XML
@@ -676,6 +758,8 @@ function detectNFeOperationType(
   cfop: string,
   fileName: string
 ): TipoOperacao {
+  const natOp = getTextContent(ide, 'natOp');
+
   // PRIORIDADE 1: Papel da empresa no documento (perspectiva da empresa usuária)
   const cnpjEmit = (getTextContent(emit, 'CNPJ') || getTextContent(emit, 'CPF')).replace(/\D/g, '');
   const cnpjDest = (getTextContent(dest, 'CNPJ') || getTextContent(dest, 'CPF')).replace(/\D/g, '');
@@ -683,30 +767,33 @@ function detectNFeOperationType(
   const empresaEhEmitente = isCnpjDaEmpresa(cnpjEmit);
   const empresaEhDestinatario = isCnpjDaEmpresa(cnpjDest);
 
+  const operacaoPorCfop = inferOperationFromCFOP(cfop);
+
   if (empresaEhEmitente && !empresaEhDestinatario) {
+    if (operacaoPorCfop && operacaoPorCfop !== 'Saída') {
+      console.warn(`Conflito de classificação em ${fileName}: empresa emitente, mas CFOP sugere Entrada`);
+    }
     return 'Saída';
   }
 
   if (empresaEhDestinatario && !empresaEhEmitente) {
+    if (operacaoPorCfop && operacaoPorCfop !== 'Entrada') {
+      console.warn(`Conflito de classificação em ${fileName}: empresa destinatária, mas CFOP sugere Saída`);
+    }
     return 'Entrada';
   }
   
-  // PRIORIDADE 2: Campo tpNF do XML (perspectiva do emitente)
+  // PRIORIDADE 2: CFOP
+  if (operacaoPorCfop) return operacaoPorCfop;
+
+  // PRIORIDADE 3: Campo tpNF do XML (perspectiva do emitente)
   const tpNF = getTextContent(ide, 'tpNF').trim();
   if (tpNF === '0') return 'Entrada';
   if (tpNF === '1') return 'Saída';
   
-  // PRIORIDADE 3: CFOP (primeiro dígito indica entrada/saída)
-  if (cfop) {
-    const cfopLimpo = cfop.replace(/\D/g, '');
-    const primeiroDigito = cfopLimpo.charAt(0);
-    
-    // 1xxx ou 2xxx = Entrada (dentro do estado ou interestadual)
-    if (primeiroDigito === '1' || primeiroDigito === '2') return 'Entrada';
-    
-    // 5xxx ou 6xxx = Saída (dentro do estado ou interestadual)
-    if (primeiroDigito === '5' || primeiroDigito === '6') return 'Saída';
-  }
+  // PRIORIDADE 4: Natureza da operação (natOp)
+  const operacaoPorNatOp = inferOperationFromNatOp(natOp);
+  if (operacaoPorNatOp) return operacaoPorNatOp;
   
   // FALLBACK: Se nada funcionou, assume Saída
   console.warn(`Não foi possível determinar tipo de operação em ${fileName}, assumindo Saída`);
@@ -724,6 +811,10 @@ function detectNFeOperationType(
  * @param ide - Elemento ide do XML
  * @param emit - Elemento emit do XML
  * @param rem - Elemento rem do XML
+ * @param dest - Elemento dest do XML
+ * @param exped - Elemento exped do XML
+ * @param receb - Elemento receb do XML
+ * @param toma - Elemento toma/toma4 do XML
  * @param fileName - Nome do arquivo para log
  * @returns Tipo de operação detectado
  */
@@ -731,28 +822,42 @@ function detectCTeOperationType(
   ide: Element | null, 
   emit: Element | null, 
   rem: Element | null,
+  dest: Element | null,
+  exped: Element | null,
+  receb: Element | null,
+  toma: Element | null,
   fileName: string
 ): TipoOperacao {
   // Obtém CNPJs
   const cnpjEmit = (getTextContent(emit, 'CNPJ') || getTextContent(emit, 'CPF')).replace(/\D/g, '');
   const cnpjRem = (getTextContent(rem, 'CNPJ') || getTextContent(rem, 'CPF')).replace(/\D/g, '');
+  const cnpjDest = (getTextContent(dest, 'CNPJ') || getTextContent(dest, 'CPF')).replace(/\D/g, '');
+  const cnpjExped = (getTextContent(exped, 'CNPJ') || getTextContent(exped, 'CPF')).replace(/\D/g, '');
+  const cnpjReceb = (getTextContent(receb, 'CNPJ') || getTextContent(receb, 'CPF')).replace(/\D/g, '');
+  const cnpjToma = (getTextContent(toma, 'CNPJ') || getTextContent(toma, 'CPF')).replace(/\D/g, '');
   
-  // Verifica se a empresa usuária é o transportador (emitente) ou o tomador/remetente
+  // Verifica se a empresa usuária é o transportador (emitente) ou algum participante tomador/remetente/destinatário
   const empresaEhEmitente = isCnpjDaEmpresa(cnpjEmit);
-  const empresaEhRemetente = isCnpjDaEmpresa(cnpjRem);
+  const empresaEhParticipanteNaoEmitente = [cnpjRem, cnpjDest, cnpjExped, cnpjReceb, cnpjToma]
+    .filter(Boolean)
+    .some(cnpj => isCnpjDaEmpresa(cnpj));
   
   // REGRA PRINCIPAL: Se identificamos a empresa
-  if (empresaEhEmitente && !empresaEhRemetente) {
+  if (empresaEhEmitente && !empresaEhParticipanteNaoEmitente) {
     // Empresa é transportador (emitente) = SAÍDA (você prestou serviço de transporte)
     return 'Saída';
   }
   
-  if (empresaEhRemetente || (!empresaEhEmitente && cnpjRem)) {
-    // Empresa é tomador/remetente = ENTRADA (você contratou o transporte)
-    // OU nota de terceiro onde você NÃO é o transportador
-    if (empresaEhRemetente) {
-      return 'Entrada';
-    }
+  if (empresaEhParticipanteNaoEmitente && !empresaEhEmitente) {
+    // Empresa é tomador/remetente/destinatário/expedidor/recebedor = ENTRADA
+    return 'Entrada';
+  }
+
+  if (empresaEhEmitente && empresaEhParticipanteNaoEmitente) {
+    // Cenário raro (mesma empresa em múltiplos papéis): usa tipo de CT-e como desempate
+    const tpCTeConflito = getTextContent(ide, 'tpCTe').trim();
+    if (tpCTeConflito === '0') return 'Saída';
+    return 'Entrada';
   }
   
   // FALLBACK: Empresa não identificada, usa campo tpCTe do XML
@@ -765,7 +870,8 @@ function detectCTeOperationType(
   }
   
   // FALLBACK FINAL
-  if (cnpjRem && cnpjEmit && cnpjRem !== cnpjEmit) {
+  const participantes = [cnpjEmit, cnpjRem, cnpjDest, cnpjExped, cnpjReceb, cnpjToma].filter(Boolean);
+  if (participantes.length >= 2 && new Set(participantes).size >= 2) {
     console.warn(`CT-e de terceiro sem identificação clara em ${fileName}, inferindo como Saída`);
     return 'Saída';
   }
@@ -943,13 +1049,20 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   
   // Finalidade da NF-e (1=Normal, 2=Complementar, 3=Ajuste, 4=Devolução)
   const finNFe = getTextContent(ide, 'finNFe');
+  const natOp = getTextContent(ide, 'natOp');
   
   // Identifica tipo especial PRIORITARIAMENTE pelo CFOP (usando cfop já extraído acima)
   const tipoPorCFOP = identificarTipoPorCFOP(cfop);
+  const tipoPorNatureza = identificarTipoPorNatureza(natOp);
   
   // Define flags baseado no CFOP (prioridade) e finNFe (fallback)
-  const isRemessa = tipoPorCFOP === 'remessa' || finNFe === '2';
-  const isAjusteEstorno = tipoPorCFOP === 'devolucao' || finNFe === '3' || finNFe === '4';
+  const isRemessa = tipoPorCFOP === 'remessa' || tipoPorNatureza === 'remessa';
+  const isAjusteEstorno =
+    tipoPorCFOP === 'devolucao' ||
+    tipoPorNatureza === 'devolucao' ||
+    tipoPorNatureza === 'ajuste' ||
+    finNFe === '3' ||
+    finNFe === '4';
   
   // Chave de acesso
   const chaveAcesso = infNFe?.getAttribute('Id')?.replace('NFe', '') ?? '';
@@ -1047,10 +1160,10 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   }
 
   // Retorna objeto NotaFiscal completo
-  const tipoDoc = isRemessa ? 'NF-e (Remessa)' 
-                : (tipoPorCFOP === 'devolucao' ? 'NF-e (Devolução)' 
-                  : (finNFe === '3' ? 'NF-e (Estorno)' 
-                    : (finNFe === '4' ? 'NF-e (Devolução)' 
+  const tipoDoc = isRemessa ? 'NF-e (Remessa)'
+                : ((tipoPorCFOP === 'devolucao' || tipoPorNatureza === 'devolucao' || finNFe === '4') ? 'NF-e (Devolução)'
+                  : ((tipoPorNatureza === 'ajuste' || finNFe === '3') ? 'NF-e (Ajuste)'
+                    : (finNFe === '2' ? 'NF-e (Complementar)'
                       : 'NF-e')));
   
   return {
@@ -1126,18 +1239,21 @@ function parseCTe(doc: Element, fileName: string): NotaFiscal {
   const emit = findElementByLocalName(doc, 'emit');
   const rem = findElementByLocalName(doc, 'rem');
   const dest = findElementByLocalName(doc, 'dest');
+  const exped = findElementByLocalName(doc, 'exped');
+  const receb = findElementByLocalName(doc, 'receb');
+  const toma = findElementByLocalName(doc, 'toma4') || findElementByLocalName(doc, 'toma');
   const vPrest = findElementByLocalName(doc, 'vPrest');
   const imp = findElementByLocalName(doc, 'imp');
   const icms = imp ? findElementByLocalName(imp, 'ICMS') : null;
   
   // Identifica tipo de operação
-  const tipoOperacao = detectCTeOperationType(ide, emit, rem, fileName);
+  const tipoOperacao = detectCTeOperationType(ide, emit, rem, dest, exped, receb, toma, fileName);
   
   // Chave de acesso
   const chaveAcesso = infCte?.getAttribute('Id')?.replace('CTe', '') ?? '';
   
   // Parceiro (cliente ou fornecedor conforme tipo de operação)
-  const parceiro = tipoOperacao === 'Saída' ? (dest || rem) : emit;
+  const parceiro = tipoOperacao === 'Saída' ? (toma || dest || rem) : emit;
   const nome = getTextContent(parceiro, 'xNome');
   const cnpj = getTextContent(parceiro, 'CNPJ') || getTextContent(parceiro, 'CPF');
 
