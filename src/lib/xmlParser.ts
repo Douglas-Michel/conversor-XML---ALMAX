@@ -186,6 +186,7 @@ const MAX_MATERIALS_DISPLAY = 1;
  */
 const EMPRESA_CNPJS = [
   '07868543000174', // CNPJ ALMAX (07.868.543/0001-74)
+  '07868543000155', // CNPJ ALMAX Filial (07.868.543/0001-55)
   // Adicione outros CNPJs/filiais se necessário
 ];
 
@@ -675,12 +676,27 @@ function detectNFeOperationType(
   cfop: string,
   fileName: string
 ): TipoOperacao {
-  // PRIORIDADE 1: Campo tpNF do XML (mais confiável)
+  // PRIORIDADE 1: Papel da empresa no documento (perspectiva da empresa usuária)
+  const cnpjEmit = (getTextContent(emit, 'CNPJ') || getTextContent(emit, 'CPF')).replace(/\D/g, '');
+  const cnpjDest = (getTextContent(dest, 'CNPJ') || getTextContent(dest, 'CPF')).replace(/\D/g, '');
+
+  const empresaEhEmitente = isCnpjDaEmpresa(cnpjEmit);
+  const empresaEhDestinatario = isCnpjDaEmpresa(cnpjDest);
+
+  if (empresaEhEmitente && !empresaEhDestinatario) {
+    return 'Saída';
+  }
+
+  if (empresaEhDestinatario && !empresaEhEmitente) {
+    return 'Entrada';
+  }
+  
+  // PRIORIDADE 2: Campo tpNF do XML (perspectiva do emitente)
   const tpNF = getTextContent(ide, 'tpNF').trim();
   if (tpNF === '0') return 'Entrada';
   if (tpNF === '1') return 'Saída';
   
-  // PRIORIDADE 2: CFOP (primeiro dígito indica entrada/saída)
+  // PRIORIDADE 3: CFOP (primeiro dígito indica entrada/saída)
   if (cfop) {
     const cfopLimpo = cfop.replace(/\D/g, '');
     const primeiroDigito = cfopLimpo.charAt(0);
@@ -690,21 +706,6 @@ function detectNFeOperationType(
     
     // 5xxx ou 6xxx = Saída (dentro do estado ou interestadual)
     if (primeiroDigito === '5' || primeiroDigito === '6') return 'Saída';
-  }
-  
-  // PRIORIDADE 3: Verifica se a empresa usuária está no emitente ou destinatário
-  const cnpjEmit = (getTextContent(emit, 'CNPJ') || getTextContent(emit, 'CPF')).replace(/\D/g, '');
-  const cnpjDest = (getTextContent(dest, 'CNPJ') || getTextContent(dest, 'CPF')).replace(/\D/g, '');
-  
-  const empresaEhEmitente = isCnpjDaEmpresa(cnpjEmit);
-  const empresaEhDestinatario = isCnpjDaEmpresa(cnpjDest);
-  
-  if (empresaEhEmitente && !empresaEhDestinatario) {
-    return 'Saída';
-  }
-  
-  if (empresaEhDestinatario && !empresaEhEmitente) {
-    return 'Entrada';
   }
   
   // FALLBACK: Se nada funcionou, assume Saída

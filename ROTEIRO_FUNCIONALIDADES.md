@@ -254,7 +254,8 @@ DEVOLUÇÕES:
 ### 1. CNPJs da Empresa
 ```typescript
 const EMPRESA_CNPJS = [
-  '07868543000174', // Adicionar CNPJs aqui
+  '07868543000174', // CNPJ ALMAX (matriz)
+  '07868543000155', // CNPJ ALMAX Filial
 ];
 ```
 
