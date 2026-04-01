@@ -356,12 +356,19 @@ function truncateToFourDecimals(value: number): number {
  */
 function getElementsByLocalName(root: Element | Document | null, tagName: string): Element[] {
   if (!root || !('getElementsByTagName' in root)) return [];
-  
-  // Busca direta (mais comum e rápida)
+
+  // PRIORIDADE 1: getElementsByTagNameNS com wildcard de namespace (ignora namespace completamente)
+  // Funciona mesmo quando o DOMParser mantém namespace internamente após parsing
+  try {
+    const byNS = (root as Element).getElementsByTagNameNS?.('*', tagName);
+    if (byNS?.length) return Array.from(byNS);
+  } catch { /* ignora se não suportado */ }
+
+  // PRIORIDADE 2: Busca direta por nome de tag (sem namespace)
   const direct = (root as Element).getElementsByTagName(tagName);
   if (direct?.length) return Array.from(direct);
-  
-  // Fallback: busca case-insensitive por localName
+
+  // PRIORIDADE 3: Fallback case-insensitive por localName (varredura completa)
   const all = (root as Element).getElementsByTagName('*');
   const tagLower = tagName.toLowerCase();
   return Array.from(all).filter(el => el.localName?.toLowerCase() === tagLower);
@@ -639,8 +646,14 @@ function cleanXmlContent(content: string): string {
   return content
     .replace(/^\uFEFF/, '') // Remove BOM
     .replace(/<!--[\s\S]*?-->/g, '') // Remove comentários
-    .replace(/\s+xmlns(:\w+)?="[^"]*"/g, '') // Remove xmlns
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') // Remove caracteres inválidos
+    // Remove TODAS as declarações xmlns (default e prefixadas), com ou sem espaço antes
+    .replace(/\s*xmlns(:\w+)?\s*=\s*"[^"]*"/g, '')
+    .replace(/\s*xmlns(:\w+)?\s*=\s*'[^']*'/g, '')
+    // Remove prefixos de namespace em nomes de elementos e atributos (ex: nfe:NFe → NFe)
+    .replace(/<(\/?)[a-zA-Z][\w.-]*:([a-zA-Z][\w.-]*)/g, '<$1$2')
+    // Remove prefixos em atributos (ex: xsi:type → type)
+    .replace(/\s[a-zA-Z][\w.-]*:([a-zA-Z][\w.-]*)\s*=/g, ' $1=')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '') // Remove caracteres inválidos
     .replace(/&(?!#?\w+;)/g, '&amp;') // Escapa & soltos
     .trim();
 }
