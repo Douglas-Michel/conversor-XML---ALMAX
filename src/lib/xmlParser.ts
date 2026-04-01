@@ -1072,63 +1072,100 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   const nome = getTextContent(parceiro, 'xNome');
   const cnpj = getTextContent(parceiro, 'CNPJ') || getTextContent(parceiro, 'CPF');
 
-  // ICMS - Usa valores do totalizador ICMSTot (padrão oficial SEFAZ)
+  // ── ICMS ─────────────────────────────────────────────────────────────────────
+  // Valores do totalizador ICMSTot (padrão oficial SEFAZ)
   const baseICMS = getNumericContent(icmsTot, 'vBC');
   const valorICMS = getNumericContent(icmsTot, 'vICMS');
-  const aliquotaICMS = baseICMS > 0 ? Math.round((valorICMS / baseICMS) * 100 * 100) / 100 : 0;
 
-  // Valores totais - Usa vBC (base de cálculo ICMS) que sempre tem o valor correto
-  const valorTotal = baseICMS 
-    || getNumericContent(icmsTot, 'vProd') 
-    || getNumericContent(doc, 'vProd')
-    || getNumericContent(icmsTot, 'vNF') 
-    || getNumericContent(doc, 'vNF');
-    
-  // Tributos - Usa valores declarados no totalizador (pula cálculos se for remessa)
+  // Alíquota ICMS: prefere pICMS declarado nos itens; fallback = cálculo reverso
+  let declaredICMSPct = 0;
+  for (const det of getElementsByLocalName(doc, 'det')) {
+    const icmsEl = findElementByLocalName(det, 'ICMS');
+    if (icmsEl?.children[0]) {
+      const pICMS = getNumericContent(icmsEl.children[0], 'pICMS');
+      if (pICMS > 0) { declaredICMSPct = pICMS; break; }
+    }
+  }
+  const aliquotaICMS = declaredICMSPct > 0
+    ? declaredICMSPct
+    : (baseICMS > 0 && valorICMS > 0 ? Math.round((valorICMS / baseICMS) * 100 * 100) / 100 : 0);
+
+  // ── VALOR TOTAL ───────────────────────────────────────────────────────────────
+  // vNF é o valor total oficial da NF-e; vBC é apenas base de cálculo do ICMS
+  const valorTotal =
+    getNumericContent(icmsTot, 'vNF') ||
+    getNumericContent(doc, 'vNF') ||
+    getNumericContent(icmsTot, 'vProd') ||
+    getNumericContent(doc, 'vProd') ||
+    baseICMS;
+
+  // ── REDUÇÃO DE BASE ICMS ──────────────────────────────────────────────────────
+  // Varre todos os itens; registra o maior percentual de redução encontrado
+  let reducaoICMS = 0;
+  for (const det of getElementsByLocalName(doc, 'det')) {
+    const icmsEl = findElementByLocalName(det, 'ICMS');
+    if (icmsEl?.children[0]) {
+      const pRed = getNumericContent(icmsEl.children[0], 'pRedBC');
+      if (pRed > reducaoICMS) reducaoICMS = pRed;
+    }
+  }
+
+  // ── TRIBUTOS ──────────────────────────────────────────────────────────────────
+  // Sempre extrai valores declarados no totalizador (incluindo em remessas)
+  // Zeramento de alíquotas e bases: populados abaixo
   let valorPIS = 0, valorCOFINS = 0, valorIPI = 0, valorDIFAL = 0;
   let aliquotaPIS = 0, aliquotaCOFINS = 0, aliquotaIPI = 0, aliquotaDIFAL = 0;
   let basePIS = 0, baseCOFINS = 0, baseIPI = 0;
   let declaredPISPct = 0, declaredCOFINSPct = 0, declaredIPIPct = 0;
-  
+
+  // IPI pode existir em remessas (circulação de mercadoria); sempre extrai
+  const ipiSummary = aggregateIPI(doc);
+  baseIPI = ipiSummary.base;
+  declaredIPIPct = ipiSummary.declaredPctWeighted;
+  valorIPI = getNumericContent(icmsTot, 'vIPI') || ipiSummary.value || 0;
+  aliquotaIPI = declaredIPIPct > 0
+    ? Math.round(declaredIPIPct * 100) / 100
+    : (baseIPI > 0 && valorIPI > 0
+      ? Math.round((valorIPI / baseIPI) * 100 * 100) / 100
+      : 0);
+
   if (!isRemessa) {
-    // Tributos - Usa valores declarados no totalizador
-    valorPIS = getNumericContent(icmsTot, 'vPIS') || 0;
+    // PIS/COFINS: não incidem em remessas operacionais
+    valorPIS    = getNumericContent(icmsTot, 'vPIS') || 0;
     valorCOFINS = getNumericContent(icmsTot, 'vCOFINS') || 0;
-    valorIPI = getNumericContent(icmsTot, 'vIPI') || 0;
-    valorDIFAL = getNumericContent(icmsTot, 'vICMSUFDest') || 0;
 
-    // PIS: cálculo com agregação por item
+    // PIS — agrega por item para obter base e alíquota ponderada reais
     const pisSummary = aggregatePisCofins(doc, 'PIS');
-    basePIS = pisSummary.base || getNumericContent(findElementByLocalName(icmsTot, 'PIS') || doc, 'vBC');
-    declaredPISPct = pisSummary.declaredPctWeighted || getNumericContent(findElementByLocalName(icmsTot, 'PIS') || doc, 'pPIS');
-    // Alíquota calculada: (Valor PIS ÷ Base ICMS) × 100
-    aliquotaPIS = (baseICMS > 0 && valorPIS > 0) ? Math.round((valorPIS / baseICMS) * 100 * 100) / 100 : (declaredPISPct > 0 ? Math.round(declaredPISPct * 100) / 100 : 0);
+    basePIS        = pisSummary.base;
+    declaredPISPct = pisSummary.declaredPctWeighted;
+    // Prioridade: % declarado → % calculado pela base própria → % calculado pela base ICMS
+    aliquotaPIS = declaredPISPct > 0
+      ? Math.round(declaredPISPct * 100) / 100
+      : basePIS > 0 && valorPIS > 0
+        ? Math.round((valorPIS / basePIS) * 100 * 100) / 100
+        : baseICMS > 0 && valorPIS > 0
+          ? Math.round((valorPIS / baseICMS) * 100 * 100) / 100
+          : 0;
 
-    // COFINS: cálculo análogo ao PIS
+    // COFINS — análogo ao PIS
     const cofinsSummary = aggregatePisCofins(doc, 'COFINS');
-    baseCOFINS = cofinsSummary.base || getNumericContent(findElementByLocalName(icmsTot, 'COFINS') || doc, 'vBC');
-    declaredCOFINSPct = cofinsSummary.declaredPctWeighted || getNumericContent(findElementByLocalName(icmsTot, 'COFINS') || doc, 'pCOFINS');
-    // Alíquota calculada: (Valor COFINS ÷ Base ICMS) × 100
-    aliquotaCOFINS = (baseICMS > 0 && valorCOFINS > 0) ? Math.round((valorCOFINS / baseICMS) * 100 * 100) / 100 : (declaredCOFINSPct > 0 ? Math.round(declaredCOFINSPct * 100) / 100 : 0);
+    baseCOFINS        = cofinsSummary.base;
+    declaredCOFINSPct = cofinsSummary.declaredPctWeighted;
+    aliquotaCOFINS = declaredCOFINSPct > 0
+      ? Math.round(declaredCOFINSPct * 100) / 100
+      : baseCOFINS > 0 && valorCOFINS > 0
+        ? Math.round((valorCOFINS / baseCOFINS) * 100 * 100) / 100
+        : baseICMS > 0 && valorCOFINS > 0
+          ? Math.round((valorCOFINS / baseICMS) * 100 * 100) / 100
+          : 0;
 
-    // IPI: extração da alíquota real do XML
-    const ipiSummary = aggregateIPI(doc);
-    baseIPI = ipiSummary.base;
-    declaredIPIPct = ipiSummary.declaredPctWeighted;
-    // Usa alíquota declarada no XML, fallback para cálculo reverso, depois 0
-    aliquotaIPI = declaredIPIPct > 0 
-      ? Math.round(declaredIPIPct * 100) / 100 
-      : (baseIPI > 0 && valorIPI > 0) 
-        ? Math.round((valorIPI / baseIPI) * 100 * 100) / 100 
-        : 0;
-
-    // DIFAL
-    aliquotaDIFAL = baseICMS > 0 ? Math.round((valorDIFAL / baseICMS) * 100 * 100) / 100 : 0;
+    // DIFAL — usa vBCUFDest quando disponível, fallback para base ICMS
+    valorDIFAL = getNumericContent(icmsTot, 'vICMSUFDest') || 0;
+    const baseDIFAL = getNumericContent(icmsTot, 'vBCUFDest') || baseICMS;
+    aliquotaDIFAL = baseDIFAL > 0 && valorDIFAL > 0
+      ? Math.round((valorDIFAL / baseDIFAL) * 100 * 100) / 100
+      : 0;
   }
-
-  // Redução ICMS do primeiro item (usa primeiroItem já declarado acima)
-  const icmsElement = primeiroItem ? findElementByLocalName(primeiroItem, 'ICMS') : null;
-  const reducaoICMS = icmsElement?.children[0] ? getNumericContent(icmsElement.children[0], 'pRedBC') : 0;
 
   // Data de emissão
   const dataStr = getTextContent(ide, 'dhEmi') || getTextContent(ide, 'dEmi');
@@ -1142,20 +1179,29 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   // Materiais
   const material = extractMaterials(doc);
 
-  // Validações: Compara valores declarados com cálculo (pula se for remessa)
+  // ── VALIDAÇÕES ────────────────────────────────────────────────────────────────
+  // Cada tributo usa sua própria base declarada para calcular o esperado
+  const tolerance = 5.0;
   let expectedPIS = 0, expectedCOFINS = 0, expectedIPI = 0, expectedICMS = 0;
   let verifiedPIS = true, verifiedCOFINS = true, verifiedIPI = true, verifiedICMS = true;
-  
-  if (!isRemessa) {
-    expectedPIS = baseICMS * (aliquotaPIS / 100);
-    expectedCOFINS = baseICMS * (aliquotaCOFINS / 100);
-    expectedIPI = baseICMS * (aliquotaIPI / 100);
-    expectedICMS = baseICMS * (aliquotaICMS / 100);
 
-    const tolerance = 5.0;
-    verifiedPIS = valorPIS === 0 || Math.abs(valorPIS - expectedPIS) <= tolerance;
-    verifiedCOFINS = valorCOFINS === 0 || Math.abs(valorCOFINS - expectedCOFINS) <= tolerance;
+  // IPI: validado sempre (pode existir em remessas)
+  if (valorIPI > 0 || aliquotaIPI > 0) {
+    expectedIPI = (baseIPI || baseICMS) * (aliquotaIPI / 100);
     verifiedIPI = valorIPI === 0 || Math.abs(valorIPI - expectedIPI) <= tolerance;
+  }
+
+  if (!isRemessa) {
+    // PIS: usa base própria; se não disponível usa base ICMS
+    expectedPIS = (basePIS || baseICMS) * (aliquotaPIS / 100);
+    verifiedPIS = valorPIS === 0 || Math.abs(valorPIS - expectedPIS) <= tolerance;
+
+    // COFINS: análogo ao PIS
+    expectedCOFINS = (baseCOFINS || baseICMS) * (aliquotaCOFINS / 100);
+    verifiedCOFINS = valorCOFINS === 0 || Math.abs(valorCOFINS - expectedCOFINS) <= tolerance;
+
+    // ICMS: usa base ICMS
+    expectedICMS = baseICMS * (aliquotaICMS / 100);
     verifiedICMS = Math.abs(valorICMS - expectedICMS) <= tolerance;
   }
 
@@ -1272,10 +1318,29 @@ function parseCTe(doc: Element, fileName: string): NotaFiscal {
   const valorIPI = getNumericContent(imp, 'vIPI') || 0;
 
   // Alíquotas
-  const aliquotaIPI = DEFAULT_IPI_RATE;
-  const aliquotaPIS = valorTotal > 0 ? (valorPIS / valorTotal) * 100 : 0;
-  const aliquotaCOFINS = valorTotal > 0 ? (valorCOFINS / valorTotal) * 100 : 0;
-  const aliquotaDIFAL = baseICMS > 0 ? (valorDIFAL / baseICMS) * 100 : 0;
+  // CT-e não tem IPI (tributo de mercadoria; CT-e é prestação de serviço de transporte)
+  const aliquotaIPI = 0;
+
+  // PIS/COFINS: tenta obter base própria do elemento imp; fallback para valor total do frete
+  const pisNode    = findElementByLocalName(imp, 'PISST')    || findElementByLocalName(imp, 'PIS');
+  const cofinsNode = findElementByLocalName(imp, 'COFINSST') || findElementByLocalName(imp, 'COFINS');
+  const basePIS_cte    = getNumericContent(pisNode, 'vBC')    || valorTotal;
+  const baseCOFINS_cte = getNumericContent(cofinsNode, 'vBC') || valorTotal;
+  const declaredPIS_cte    = getNumericContent(pisNode, 'pPIS')    || getNumericContent(pisNode, 'pPISST');
+  const declaredCOFINS_cte = getNumericContent(cofinsNode, 'pCOFINS') || getNumericContent(cofinsNode, 'pCOFINSST');
+
+  const aliquotaPIS = declaredPIS_cte > 0
+    ? declaredPIS_cte
+    : (basePIS_cte > 0 && valorPIS > 0 ? Math.round((valorPIS / basePIS_cte) * 100 * 100) / 100 : 0);
+  const aliquotaCOFINS = declaredCOFINS_cte > 0
+    ? declaredCOFINS_cte
+    : (baseCOFINS_cte > 0 && valorCOFINS > 0 ? Math.round((valorCOFINS / baseCOFINS_cte) * 100 * 100) / 100 : 0);
+
+  // DIFAL: usa vBCUFDest quando disponível
+  const baseDIFAL_cte = getNumericContent(icmsChild, 'vBCUFDest') || baseICMS;
+  const aliquotaDIFAL = baseDIFAL_cte > 0 && valorDIFAL > 0
+    ? Math.round((valorDIFAL / baseDIFAL_cte) * 100 * 100) / 100
+    : 0;
 
   // Data de emissão
   const dataStr = getTextContent(ide, 'dhEmi') || getTextContent(ide, 'dEmi');
@@ -1289,18 +1354,15 @@ function parseCTe(doc: Element, fileName: string): NotaFiscal {
   // Materiais
   const material = extractMaterials(doc);
 
-  // Validações de consistência
-  const expectedPIS = valorTotal * (aliquotaPIS / 100);
-  const verifiedPIS = amountsClose(valorPIS, expectedPIS);
-
-  const expectedCOFINS = valorTotal * (aliquotaCOFINS / 100);
-  const verifiedCOFINS = amountsClose(valorCOFINS, expectedCOFINS);
-
-  const expectedIPI = valorTotal * (aliquotaIPI / 100);
-  const verifiedIPI = amountsClose(valorIPI, expectedIPI);
-
-  const expectedICMS = baseICMS > 0 ? baseICMS * (aliquotaICMS / 100) : 0;
-  const verifiedICMS = amountsClose(valorICMS, expectedICMS);
+  // Validações de consistência (cada tributo usa sua própria base)
+  const expectedPIS    = (basePIS_cte    || valorTotal) * (aliquotaPIS    / 100);
+  const verifiedPIS    = valorPIS    === 0 || amountsClose(valorPIS,    expectedPIS);
+  const expectedCOFINS = (baseCOFINS_cte || valorTotal) * (aliquotaCOFINS / 100);
+  const verifiedCOFINS = valorCOFINS === 0 || amountsClose(valorCOFINS, expectedCOFINS);
+  const expectedIPI    = 0; // CT-e não tem IPI
+  const verifiedIPI    = true;
+  const expectedICMS   = baseICMS > 0 ? baseICMS * (aliquotaICMS / 100) : 0;
+  const verifiedICMS   = amountsClose(valorICMS, expectedICMS);
 
   // Retorna objeto NotaFiscal completo
   return {
@@ -1321,7 +1383,7 @@ function parseCTe(doc: Element, fileName: string): NotaFiscal {
     aliquotaCOFINS: truncateToFourDecimals(aliquotaCOFINS),
     flagCOFINS: valorCOFINS > 0,
     valorCOFINS,
-    aliquotaIPI: DEFAULT_IPI_RATE,
+    aliquotaIPI: 0,
     flagIPI: false,
     valorIPI: 0,
     aliquotaICMS,
