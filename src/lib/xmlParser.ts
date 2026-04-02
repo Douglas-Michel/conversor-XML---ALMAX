@@ -146,6 +146,40 @@ const DEFAULT_PIS_RATE = 1.65;
 const DEFAULT_COFINS_RATE = 7.6;
 
 /**
+ * Alíquota interna padrão de ICMS por UF para inferência de DIFAL quando o XML
+ * não traz o grupo explícito de partilha/destino.
+ */
+const INTERNAL_ICMS_RATE_BY_UF: Record<string, number> = {
+  AC: 17,
+  AL: 19,
+  AM: 20,
+  AP: 18,
+  BA: 20.5,
+  CE: 20,
+  DF: 20,
+  ES: 17,
+  GO: 19,
+  MA: 23,
+  MG: 18,
+  MS: 17,
+  MT: 17,
+  PA: 19,
+  PB: 20,
+  PE: 20.5,
+  PI: 21,
+  PR: 19.5,
+  RJ: 20,
+  RN: 20,
+  RO: 19.5,
+  RR: 20,
+  RS: 17,
+  SC: 17,
+  SE: 19,
+  SP: 18,
+  TO: 20,
+};
+
+/**
  * Tolerância para comparação de valores monetários (1% ou R$ 0,10 mínimo)
  */
 const AMOUNT_TOLERANCE_PERCENT = 0.01;
@@ -410,6 +444,66 @@ function getNumericContent(element: Element | null, tagName: string): number {
   const text = getTextContent(element, tagName);
   const parsed = parseFloat(text);
   return isNaN(parsed) ? 0 : parsed;
+}
+
+function roundToTwoDecimals(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function inferDifalForInterstateEntry(params: {
+  tipoOperacao: TipoOperacao;
+  idDest: string;
+  destUF: string;
+  baseICMS: number;
+  valorICMS: number;
+  aliquotaICMS: number;
+  valorDIFAL: number;
+  aliquotaDIFAL: number;
+}): { valorDIFAL: number; aliquotaDIFAL: number } {
+  const {
+    tipoOperacao,
+    idDest,
+    destUF,
+    baseICMS,
+    valorICMS,
+    aliquotaICMS,
+    valorDIFAL,
+    aliquotaDIFAL,
+  } = params;
+
+  if (valorDIFAL > 0 || aliquotaDIFAL > 0) {
+    return { valorDIFAL, aliquotaDIFAL };
+  }
+
+  if (tipoOperacao !== 'Entrada' || idDest !== '2' || baseICMS <= 0) {
+    return { valorDIFAL, aliquotaDIFAL };
+  }
+
+  const internalRate = INTERNAL_ICMS_RATE_BY_UF[destUF.toUpperCase()];
+  if (!internalRate || aliquotaICMS <= 0 || aliquotaICMS >= internalRate) {
+    return { valorDIFAL, aliquotaDIFAL };
+  }
+
+  const inferredAliquotaDIFAL = roundToTwoDecimals(internalRate - aliquotaICMS);
+  const inferredValorDIFAL = roundToTwoDecimals(baseICMS * (inferredAliquotaDIFAL / 100));
+
+  if (inferredValorDIFAL <= 0) {
+    return { valorDIFAL, aliquotaDIFAL };
+  }
+
+  if (valorICMS <= 0) {
+    return { valorDIFAL: inferredValorDIFAL, aliquotaDIFAL: inferredAliquotaDIFAL };
+  }
+
+  const maxReasonableRate = 25;
+  if (inferredAliquotaDIFAL > maxReasonableRate) {
+    return { valorDIFAL, aliquotaDIFAL };
+  }
+
+  return {
+    valorDIFAL: inferredValorDIFAL,
+    aliquotaDIFAL: inferredAliquotaDIFAL,
+  };
 }
 
 // ============================================================================
@@ -1052,6 +1146,8 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   const dest = findElementByLocalName(doc, 'dest');
   const total = findElementByLocalName(doc, 'total');
   const icmsTot = total ? findElementByLocalName(total, 'ICMSTot') : null;
+  const emitEnder = findElementByLocalName(emit, 'enderEmit');
+  const destEnder = findElementByLocalName(dest, 'enderDest');
   
   // Extrai CFOP do primeiro item (necessário para detecção de tipo)
   const primeiroItem = getElementsByLocalName(doc, 'det')[0];
@@ -1063,6 +1159,8 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
   // Finalidade da NF-e (1=Normal, 2=Complementar, 3=Ajuste, 4=Devolução)
   const finNFe = getTextContent(ide, 'finNFe');
   const natOp = getTextContent(ide, 'natOp');
+  const idDest = getTextContent(ide, 'idDest');
+  const destUF = getTextContent(destEnder, 'UF');
   
   // Identifica tipo especial PRIORITARIAMENTE pelo CFOP (usando cfop já extraído acima)
   const tipoPorCFOP = identificarTipoPorCFOP(cfop);
@@ -1178,6 +1276,19 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
     aliquotaDIFAL = baseDIFAL > 0 && valorDIFAL > 0
       ? Math.round((valorDIFAL / baseDIFAL) * 100 * 100) / 100
       : 0;
+
+    const inferredDifal = inferDifalForInterstateEntry({
+      tipoOperacao,
+      idDest,
+      destUF,
+      baseICMS: baseDIFAL,
+      valorICMS,
+      aliquotaICMS,
+      valorDIFAL,
+      aliquotaDIFAL,
+    });
+    valorDIFAL = inferredDifal.valorDIFAL;
+    aliquotaDIFAL = inferredDifal.aliquotaDIFAL;
   }
 
   // Data de emissão
