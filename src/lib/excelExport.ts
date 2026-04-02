@@ -7,6 +7,20 @@ function getTodayBRDate(): string {
   return format(new Date(), 'dd/MM/yyyy');
 }
 
+function normalizeExcelOperationType(nota: NotaFiscal): string {
+  const rawValue = `${nota.tipoOperacao || ''} ${nota.tipo || ''}`
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (rawValue.includes('ENTRADA')) return 'ENTRADA';
+  if (rawValue.includes('SAIDA')) return 'SAIDA';
+
+  return '';
+}
+
 export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fiscais') {
   const today = getTodayBRDate();
 
@@ -39,7 +53,7 @@ export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fis
   // Main sheet: keep same columns/order as the UI table for visual parity
   const data = normalizedNotas.map((nota) => ({
     'DATA EMISSÃO': parseDate(nota.dataEmissao || today),
-    'TIPO NF': nota.tipoOperacao || '',
+    'TIPO NF': normalizeExcelOperationType(nota),
     'FORNECEDOR/CLIENTE': nota.fornecedorCliente?.toUpperCase() || '',
     'Nº NF-E': nota.tipo?.includes('NF-e') ? nota.numero : '',
     'Nº CT-E': nota.numeroCTe || '',
