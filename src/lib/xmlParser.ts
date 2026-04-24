@@ -74,6 +74,7 @@ export interface NotaFiscal {
   
   // Tributos ICMS
   aliquotaICMS: number;
+  aliquotaICMSExibida?: number;
   flagICMS: boolean;
   valorICMS: number;
   
@@ -144,6 +145,8 @@ const DEFAULT_PIS_RATE = 1.65;
  * Alíquota COFINS padrão (fallback quando não declarada)
  */
 const DEFAULT_COFINS_RATE = 7.6;
+const DEFAULT_ICMS_RATE = 17;
+const DEFERRED_ICMS_DISPLAY_RATE = 12;
 
 /**
  * Alíquota interna padrão de ICMS por UF para inferência de DIFAL quando o XML
@@ -448,6 +451,52 @@ function getNumericContent(element: Element | null, tagName: string): number {
 
 function roundToTwoDecimals(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function hasDeferredICMS(doc: Element | null): boolean {
+  if (!doc) return false;
+
+  for (const det of getElementsByLocalName(doc, 'det')) {
+    const icmsEl = findElementByLocalName(det, 'ICMS');
+    const icmsChild = icmsEl?.children[0];
+
+    if (!icmsChild) continue;
+
+    const cst = getTextContent(icmsChild, 'CST').trim();
+    if (cst === '51') return true;
+
+    if (getNumericContent(icmsChild, 'pDif') > 0) return true;
+    if (getNumericContent(icmsChild, 'vICMSDif') > 0) return true;
+  }
+
+  const additionalInfo = [
+    ...getElementsByLocalName(doc, 'infCpl'),
+    ...getElementsByLocalName(doc, 'infAdFisco'),
+    ...getElementsByLocalName(doc, 'xTexto'),
+  ]
+    .map((element) => element.textContent?.trim() ?? '')
+    .join(' ');
+
+  const normalizedInfo = normalizeOperationText(additionalInfo);
+  if (!normalizedInfo) return false;
+
+  return /\bdiferid\w*|\bdiferiment\w*/.test(normalizedInfo);
+}
+
+function getDisplayedICMSAliquota(params: {
+  tipoDocumento: string;
+  doc?: Element | null;
+  aliquotaICMS: number;
+}): number {
+  const { tipoDocumento, doc, aliquotaICMS } = params;
+
+  if (!tipoDocumento.includes('NF-e')) {
+    return aliquotaICMS;
+  }
+
+  return hasDeferredICMS(doc ?? null)
+    ? DEFERRED_ICMS_DISPLAY_RATE
+    : DEFAULT_ICMS_RATE;
 }
 
 function inferDifalForInterstateEntry(params: {
@@ -1335,6 +1384,11 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
                   : ((tipoPorNatureza === 'ajuste' || finNFe === '3') ? 'NF-e (Ajuste)'
                     : (finNFe === '2' ? 'NF-e (Complementar)'
                       : 'NF-e')));
+  const aliquotaICMSExibida = getDisplayedICMSAliquota({
+    tipoDocumento: tipoDoc,
+    doc,
+    aliquotaICMS,
+  });
   
   return {
     id: crypto.randomUUID(),
@@ -1362,6 +1416,7 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
     flagIPI: valorIPI > 0,
     valorIPI,
     aliquotaICMS: truncateToFourDecimals(aliquotaICMS),
+    aliquotaICMSExibida: truncateToFourDecimals(aliquotaICMSExibida),
     flagICMS: valorICMS > 0,
     valorICMS,
     aliquotaDIFAL: truncateToFourDecimals(aliquotaDIFAL),
@@ -1489,6 +1544,11 @@ function parseCTe(doc: Element, fileName: string): NotaFiscal {
   const verifiedICMS   = amountsClose(valorICMS, expectedICMS);
 
   // Retorna objeto NotaFiscal completo
+  const aliquotaICMSExibida = getDisplayedICMSAliquota({
+    tipoDocumento: 'CT-e',
+    aliquotaICMS,
+  });
+
   return {
     id: crypto.randomUUID(),
     tipo: 'CT-e',
@@ -1511,6 +1571,7 @@ function parseCTe(doc: Element, fileName: string): NotaFiscal {
     flagIPI: false,
     valorIPI: 0,
     aliquotaICMS,
+    aliquotaICMSExibida: truncateToFourDecimals(aliquotaICMSExibida),
     flagICMS: valorICMS > 0,
     valorICMS,
     aliquotaDIFAL: truncateToFourDecimals(aliquotaDIFAL),
@@ -1625,6 +1686,7 @@ export function parseNFeXML(xmlContent: string, fileName: string): NotaFiscal | 
         flagIPI: false,
         valorIPI: 0,
         aliquotaICMS: 0,
+        aliquotaICMSExibida: 0,
         flagICMS: false,
         valorICMS: 0,
         aliquotaDIFAL: 0,

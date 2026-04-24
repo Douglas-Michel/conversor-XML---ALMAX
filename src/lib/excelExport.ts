@@ -8,7 +8,7 @@ function getTodayBRDate(): string {
 }
 
 function normalizeExcelOperationType(nota: NotaFiscal): string {
-  const rawValue = `${nota.tipoOperacao || ''} ${nota.tipo || ''}`
+  const rawValue = `${nota.tipoOperacao || ''}`
     .toUpperCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, ' ')
@@ -65,7 +65,7 @@ export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fis
     'COFINS': nota.valorCOFINS,
     'ALÍQ. IPI': nota.aliquotaIPI !== undefined ? nota.aliquotaIPI / 100 : null,
     'IPI': nota.valorIPI,
-    'ALÍQ. ICMS': nota.aliquotaICMS !== undefined ? nota.aliquotaICMS / 100 : null,
+    'ALÍQ. ICMS': (nota.aliquotaICMSExibida ?? nota.aliquotaICMS) !== undefined ? (nota.aliquotaICMSExibida ?? nota.aliquotaICMS) / 100 : null,
     'ICMS': nota.valorICMS,
     'ALÍQ. DIFAL': nota.aliquotaDIFAL !== undefined ? nota.aliquotaDIFAL / 100 : null,
     'DIFAL': nota.valorDIFAL,

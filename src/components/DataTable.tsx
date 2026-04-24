@@ -174,7 +174,7 @@ export function DataTable({ data }: DataTableProps) {
                     {formatCurrency(nota.valorIPI)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {formatPercent(nota.aliquotaICMS)}
+                    {formatPercent(nota.aliquotaICMSExibida ?? nota.aliquotaICMS)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
                     {formatCurrency(nota.valorICMS)}
