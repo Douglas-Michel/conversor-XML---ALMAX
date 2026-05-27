@@ -49,6 +49,7 @@ export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fis
   const data = normalizedNotas.map((nota) => ({
     'DATA EMISSÃO': parseDate(nota.dataEmissao || today),
     'TIPO NF': normalizeExcelOperationType(nota),
+    'CFOP': nota.cfop || '',
     'FORNECEDOR/CLIENTE': nota.fornecedorCliente?.toUpperCase() || '',
     'Nº NF-E': nota.tipo?.includes('NF-e') ? nota.numero : '',
     'Nº CT-E': nota.numeroCTe || '',
@@ -137,6 +138,7 @@ export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fis
   const columnWidths = [
     { wch: 12 },  // Data Emissão
     { wch: 10 },  // Tipo NF
+    { wch: 8 },   // CFOP
     { wch: 40 },  // Fornecedor/Cliente
     { wch: 12 },  // Nº NF-e
     { wch: 12 },  // Nº CT-e

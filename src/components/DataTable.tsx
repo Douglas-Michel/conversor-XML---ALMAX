@@ -72,12 +72,13 @@ export function DataTable({ data }: DataTableProps) {
       className="rounded-xl border border-border bg-card shadow-soft overflow-hidden"
     >
       <ScrollArea className="w-full">
-        <div className="min-w-[2300px]">
+        <div className="min-w-[2380px]">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/50 hover:bg-muted/50">
                 <TableHead className="font-semibold text-foreground whitespace-nowrap text-center">Data Emissão</TableHead>
                 <TableHead className="font-semibold text-foreground whitespace-nowrap text-center">Tipo NF</TableHead>
+                <TableHead className="font-semibold text-foreground whitespace-nowrap text-center">CFOP</TableHead>
                 <TableHead className="font-semibold text-foreground whitespace-nowrap">Fornecedor/Cliente</TableHead>
                 <TableHead className="font-semibold text-foreground whitespace-nowrap text-center">Nº NF-e</TableHead>
                 <TableHead className="font-semibold text-foreground whitespace-nowrap text-center">Nº CT-E</TableHead>
@@ -131,6 +132,16 @@ export function DataTable({ data }: DataTableProps) {
                           <p className="font-semibold">CFOP: {nota.cfop || 'N/A'}</p>
                           <p className="text-muted-foreground mt-1">{getCFOPDescription(nota.cfop)}</p>
                         </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell className="font-mono text-sm text-center whitespace-nowrap">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help">{nota.cfop || '-'}</span>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs">
+                        <p className="text-sm">{getCFOPDescription(nota.cfop)}</p>
                       </TooltipContent>
                     </Tooltip>
                   </TableCell>
