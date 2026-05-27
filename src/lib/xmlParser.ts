@@ -1251,11 +1251,11 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
     : (baseICMS > 0 && valorICMS > 0 ? Math.round((valorICMS / baseICMS) * 100 * 100) / 100 : 0);
 
   // ── VALOR TOTAL ───────────────────────────────────────────────────────────────
-  // Para relatorios fiscais, usa a base do ICMS; se ausente, usa o total dos produtos.
+  // Para relatorios fiscais, usa o total dos produtos; se ausente, usa a base ICMS.
   const valorTotal =
-    baseICMS ||
     getNumericContent(icmsTot, 'vProd') ||
     getNumericContent(doc, 'vProd') ||
+    baseICMS ||
     getNumericContent(icmsTot, 'vNF') ||
     getNumericContent(doc, 'vNF');
 
