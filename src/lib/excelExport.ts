@@ -8,17 +8,12 @@ function getTodayBRDate(): string {
 }
 
 function normalizeExcelOperationType(nota: NotaFiscal): string {
-  const rawValue = `${nota.tipoOperacao || ''}`
-    .toUpperCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (rawValue.includes('ENTRADA')) return 'ENTRADA';
-  if (rawValue.includes('SAIDA')) return 'SAIDA';
-
-  return '';
+  // Exibe o tipo completo igual à tela: "NF-e (Remessa) - SAÍDA", "NF-e - ENTRADA", etc
+  const tipo = (nota.tipo || '').toUpperCase();
+  const op = (nota.tipoOperacao || '').toUpperCase();
+  if (!tipo && !op) return '';
+  if (tipo && op) return `${tipo} - ${op}`;
+  return tipo || op;
 }
 
 export function exportToExcel(notas: NotaFiscal[], fileName: string = 'notas_fiscais') {

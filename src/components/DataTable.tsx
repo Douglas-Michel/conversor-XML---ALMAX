@@ -121,13 +121,8 @@ export function DataTable({ data }: DataTableProps) {
                             variant={nota.isRemessa ? 'secondary' : nota.isAjusteEstorno ? 'outline' : 'default'}
                             className="text-xs whitespace-nowrap"
                           >
-                            {nota.tipo}
-                          </Badge>
-                          <Badge 
-                            variant={nota.tipoOperacao === 'Entrada' ? 'blue' : 'destructive'}
-                            className="text-xs whitespace-nowrap"
-                          >
-                            {nota.tipoOperacao}
+                            {/* Exibe tipo + operação igual ao Excel */}
+                            {nota.tipo ? `${nota.tipo.toUpperCase()} - ${nota.tipoOperacao?.toUpperCase()}` : nota.tipoOperacao}
                           </Badge>
                         </div>
                       </TooltipTrigger>
