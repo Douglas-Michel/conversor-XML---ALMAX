@@ -1251,13 +1251,13 @@ function parseNFe(doc: Element, fileName: string): NotaFiscal {
     : (baseICMS > 0 && valorICMS > 0 ? Math.round((valorICMS / baseICMS) * 100 * 100) / 100 : 0);
 
   // ── VALOR TOTAL ───────────────────────────────────────────────────────────────
-  // vNF é o valor total oficial da NF-e; vBC é apenas base de cálculo do ICMS
+  // Para relatorios fiscais, usa a base do ICMS; se ausente, usa o total dos produtos.
   const valorTotal =
-    getNumericContent(icmsTot, 'vNF') ||
-    getNumericContent(doc, 'vNF') ||
+    baseICMS ||
     getNumericContent(icmsTot, 'vProd') ||
     getNumericContent(doc, 'vProd') ||
-    baseICMS;
+    getNumericContent(icmsTot, 'vNF') ||
+    getNumericContent(doc, 'vNF');
 
   // ── REDUÇÃO DE BASE ICMS ──────────────────────────────────────────────────────
   // Varre todos os itens; registra o maior percentual de redução encontrado
